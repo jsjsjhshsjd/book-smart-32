@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,43 +20,39 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 
-// Mock data - será conectado ao Supabase
-const mockProfessionals = [
-  {
-    id: 1,
-    name: "Maria Silva",
-    specialties: ["Cabelo", "Escova", "Corte"],
-    rating: 4.9,
-    image: "/placeholder.svg",
-    available: true
-  },
-  {
-    id: 2,
-    name: "João Santos",
-    specialties: ["Barba", "Corte Masculino", "Bigode"],
-    rating: 4.8,
-    image: "/placeholder.svg",
-    available: true
-  },
-  {
-    id: 3,
-    name: "Ana Costa",
-    specialties: ["Coloração", "Luzes", "Tratamentos"],
-    rating: 5.0,
-    image: "/placeholder.svg",
-    available: true
-  }
-];
+interface Professional {
+  id: string;
+  name: string;
+  specialty: string;
+  avatar_url: string;
+  is_active: boolean;
+}
 
-const mockServices = [
-  { id: 1, name: "Corte Feminino", duration: 60, price: "R$ 45", professionalId: 1 },
-  { id: 2, name: "Escova", duration: 45, price: "R$ 35", professionalId: 1 },
-  { id: 3, name: "Corte Masculino", duration: 30, price: "R$ 25", professionalId: 2 },
-  { id: 4, name: "Barba", duration: 20, price: "R$ 15", professionalId: 2 },
-  { id: 5, name: "Coloração", duration: 120, price: "R$ 80", professionalId: 3 },
-  { id: 6, name: "Luzes", duration: 180, price: "R$ 120", professionalId: 3 }
-];
+interface Service {
+  id: string;
+  name: string;
+  description: string;
+  duration: number;
+  price: number;
+  professional_id: string;
+}
+
+interface BookingData {
+  professional?: Professional;
+  service?: Service;
+  date?: Date;
+  time?: string;
+  notes?: string;
+}
+
+interface User {
+  name: string;
+  email: string;
+  phone: string;
+}
 
 const mockTimeSlots = [
   "09:00", "09:30", "10:00", "10:30", "11:00", "11:30",
@@ -65,26 +61,208 @@ const mockTimeSlots = [
 
 type Step = 'welcome' | 'login' | 'professionals' | 'services' | 'datetime' | 'notes' | 'confirmation' | 'myBookings';
 
-interface User {
-  name: string;
-  email: string;
-  phone: string;
-}
-
-interface BookingData {
-  professional?: typeof mockProfessionals[0];
-  service?: typeof mockServices[0];
-  date?: Date;
-  time?: string;
-  notes?: string;
-}
-
 export default function Booking() {
   const [currentStep, setCurrentStep] = useState<Step>('welcome');
   const [user, setUser] = useState<User | null>(null);
   const [bookingData, setBookingData] = useState<BookingData>({});
   const [loginForm, setLoginForm] = useState({ name: '', email: '', phone: '', password: '' });
   const [selectedDate, setSelectedDate] = useState<Date | undefined>();
+  const [professionals, setProfessionals] = useState<Professional[]>([]);
+  const [services, setServices] = useState<Service[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const { toast } = useToast();
+
+  // Check authentication
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setIsAuthenticated(!!session);
+      setCurrentUser(session?.user || null);
+      if (session?.user) {
+        setUser({
+          name: session.user.user_metadata?.name || session.user.email || '',
+          email: session.user.email || '',
+          phone: session.user.user_metadata?.phone || ''
+        });
+        setCurrentStep('professionals');
+      }
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      setIsAuthenticated(!!session);
+      setCurrentUser(session?.user || null);
+      if (session?.user) {
+        setUser({
+          name: session.user.user_metadata?.name || session.user.email || '',
+          email: session.user.email || '',
+          phone: session.user.user_metadata?.phone || ''
+        });
+        setCurrentStep('professionals');
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Load professionals
+  useEffect(() => {
+    loadProfessionals();
+  }, []);
+
+  // Load services when professional is selected
+  useEffect(() => {
+    if (bookingData.professional) {
+      loadServices(bookingData.professional.id);
+    }
+  }, [bookingData.professional]);
+
+  const loadProfessionals = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('professionals')
+        .select('*')
+        .eq('is_active', true)
+        .order('name');
+      
+      if (error) throw error;
+      setProfessionals(data || []);
+    } catch (error) {
+      console.error('Error loading professionals:', error);
+      toast({
+        title: "Erro",
+        description: "Erro ao carregar profissionais",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const loadServices = async (professionalId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('services')
+        .select('*')
+        .eq('professional_id', professionalId)
+        .eq('is_active', true)
+        .order('name');
+      
+      if (error) throw error;
+      setServices(data || []);
+    } catch (error) {
+      console.error('Error loading services:', error);
+      toast({
+        title: "Erro",
+        description: "Erro ao carregar serviços",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleAuth = async () => {
+    setLoading(true);
+    try {
+      if (isSignUp) {
+        const { error } = await supabase.auth.signUp({
+          email: loginForm.email,
+          password: loginForm.password,
+          options: {
+            emailRedirectTo: `${window.location.origin}/booking`,
+            data: {
+              name: loginForm.name,
+              phone: loginForm.phone
+            }
+          }
+        });
+        
+        if (error) throw error;
+        
+        toast({
+          title: "Conta criada com sucesso! ✅",
+          description: "Você já pode continuar com o agendamento.",
+        });
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: loginForm.email,
+          password: loginForm.password
+        });
+        
+        if (error) throw error;
+        
+        toast({
+          title: "Login realizado com sucesso! ✅",
+          description: "Bem-vindo de volta!",
+        });
+      }
+    } catch (error: any) {
+      toast({
+        title: "Erro",
+        description: error.message,
+        variant: "destructive"
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleBookingSubmit = async () => {
+    if (!currentUser || !bookingData.professional || !bookingData.service || !bookingData.date || !bookingData.time) return;
+    
+    setLoading(true);
+    try {
+      // Get or create user profile
+      let { data: profile } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('user_id', currentUser.id)
+        .single();
+      
+      if (!profile) {
+        // Create profile if it doesn't exist
+        const { data: newProfile, error: profileError } = await supabase
+          .from('profiles')
+          .insert({
+            user_id: currentUser.id,
+            name: user?.name || currentUser.email || '',
+            email: currentUser.email || '',
+            phone: user?.phone || ''
+          })
+          .select('id')
+          .single();
+        
+        if (profileError) throw profileError;
+        profile = newProfile;
+      }
+      
+      const { error } = await supabase
+        .from('appointments')
+        .insert({
+          client_id: profile.id,
+          professional_id: bookingData.professional.id,
+          service_id: bookingData.service.id,
+          appointment_date: format(bookingData.date, "yyyy-MM-dd"),
+          appointment_time: bookingData.time,
+          notes: bookingData.notes || null
+        });
+      
+      if (error) throw error;
+      
+      toast({
+        title: "Agendamento Confirmado! ✅",
+        description: "Seu agendamento foi realizado com sucesso!",
+      });
+      
+      setCurrentStep('confirmation');
+    } catch (error: any) {
+      toast({
+        title: "Erro",
+        description: error.message,
+        variant: "destructive"
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Welcome Step
   const WelcomeStep = () => (
@@ -140,21 +318,23 @@ export default function Booking() {
   const LoginStep = () => (
     <div className="max-w-md mx-auto space-y-6">
       <div className="text-center space-y-2">
-        <h2 className="text-2xl font-bold">Entre ou Cadastre-se</h2>
+        <h2 className="text-2xl font-bold">{isSignUp ? "Criar Conta" : "Entre ou Cadastre-se"}</h2>
         <p className="text-muted-foreground">Para continuar com seu agendamento</p>
       </div>
 
       <Card className="card-premium">
         <CardContent className="p-6 space-y-4">
-          <div>
-            <Label htmlFor="name">Nome Completo</Label>
-            <Input
-              id="name"
-              value={loginForm.name}
-              onChange={(e) => setLoginForm({...loginForm, name: e.target.value})}
-              placeholder="Seu nome completo"
-            />
-          </div>
+          {isSignUp && (
+            <div>
+              <Label htmlFor="name">Nome Completo</Label>
+              <Input
+                id="name"
+                value={loginForm.name}
+                onChange={(e) => setLoginForm({...loginForm, name: e.target.value})}
+                placeholder="Seu nome completo"
+              />
+            </div>
+          )}
           <div>
             <Label htmlFor="email">E-mail</Label>
             <Input
@@ -165,15 +345,17 @@ export default function Booking() {
               placeholder="seu@email.com"
             />
           </div>
-          <div>
-            <Label htmlFor="phone">WhatsApp</Label>
-            <Input
-              id="phone"
-              value={loginForm.phone}
-              onChange={(e) => setLoginForm({...loginForm, phone: e.target.value})}
-              placeholder="(11) 99999-9999"
-            />
-          </div>
+          {isSignUp && (
+            <div>
+              <Label htmlFor="phone">WhatsApp</Label>
+              <Input
+                id="phone"
+                value={loginForm.phone}
+                onChange={(e) => setLoginForm({...loginForm, phone: e.target.value})}
+                placeholder="(11) 99999-9999"
+              />
+            </div>
+          )}
           <div>
             <Label htmlFor="password">Senha</Label>
             <Input
@@ -186,14 +368,20 @@ export default function Booking() {
           </div>
           <Button 
             className="w-full btn-premium"
-            onClick={() => {
-              setUser({ name: loginForm.name, email: loginForm.email, phone: loginForm.phone });
-              setCurrentStep('professionals');
-            }}
-            disabled={!loginForm.name || !loginForm.email || !loginForm.phone || !loginForm.password}
+            onClick={handleAuth}
+            disabled={loading || !loginForm.email || !loginForm.password || (isSignUp && (!loginForm.name || !loginForm.phone))}
           >
-            Continuar
+            {loading ? "Aguarde..." : (isSignUp ? "Criar Conta" : "Entrar")}
           </Button>
+          <div className="text-center">
+            <button
+              type="button"
+              onClick={() => setIsSignUp(!isSignUp)}
+              className="text-primary hover:underline text-sm"
+            >
+              {isSignUp ? "Já tem conta? Fazer login" : "Não tem conta? Criar agora"}
+            </button>
+          </div>
         </CardContent>
       </Card>
 
@@ -213,7 +401,7 @@ export default function Booking() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {mockProfessionals.map((professional) => (
+        {professionals.map((professional) => (
           <Card 
             key={professional.id} 
             className="card-premium cursor-pointer hover:border-primary transition-all hover:shadow-lg"
@@ -223,22 +411,20 @@ export default function Booking() {
             }}
           >
             <CardContent className="p-6 text-center space-y-4">
-              <div className="w-20 h-20 bg-gradient-to-br from-primary/20 to-primary/10 rounded-full flex items-center justify-center mx-auto">
-                <User className="h-10 w-10 text-primary" />
+              <div className="w-20 h-20 rounded-full overflow-hidden mx-auto">
+                <img 
+                  src={professional.avatar_url} 
+                  alt={professional.name}
+                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    const target = e.target as HTMLImageElement;
+                    target.src = "/placeholder.svg";
+                  }}
+                />
               </div>
               <div>
                 <h3 className="font-semibold text-lg">{professional.name}</h3>
-                <div className="flex items-center justify-center space-x-1 mt-1">
-                  <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
-                  <span className="text-sm font-medium">{professional.rating}</span>
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-1 justify-center">
-                {professional.specialties.map((specialty, index) => (
-                  <Badge key={index} variant="secondary" className="text-xs">
-                    {specialty}
-                  </Badge>
-                ))}
+                <p className="text-sm text-muted-foreground">{professional.specialty}</p>
               </div>
               <Badge className="bg-success text-success-foreground">
                 Disponível
@@ -258,56 +444,49 @@ export default function Booking() {
   );
 
   // Services Step
-  const ServicesStep = () => {
-    const availableServices = mockServices.filter(
-      service => service.professionalId === bookingData.professional?.id
-    );
-
-    return (
-      <div className="space-y-6">
-        <div className="text-center space-y-2">
-          <h2 className="text-2xl font-bold">Escolha o Serviço</h2>
-          <p className="text-muted-foreground">
-            Serviços disponíveis com {bookingData.professional?.name}
-          </p>
-        </div>
-
-        <div className="grid gap-4">
-          {availableServices.map((service) => (
-            <Card 
-              key={service.id}
-              className="card-premium cursor-pointer hover:border-primary transition-all"
-              onClick={() => {
-                setBookingData({...bookingData, service});
-                setCurrentStep('datetime');
-              }}
-            >
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="font-semibold text-lg">{service.name}</h3>
-                    <p className="text-sm text-muted-foreground">
-                      Duração: {service.duration} minutos
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-2xl font-bold text-primary">{service.price}</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-
-        <div className="flex justify-center">
-          <Button variant="ghost" onClick={() => setCurrentStep('professionals')}>
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Voltar
-          </Button>
-        </div>
+  const ServicesStep = () => (
+    <div className="space-y-6">
+      <div className="text-center space-y-2">
+        <h2 className="text-2xl font-bold">Escolha o Serviço</h2>
+        <p className="text-muted-foreground">
+          Serviços disponíveis com {bookingData.professional?.name}
+        </p>
       </div>
-    );
-  };
+
+      <div className="grid gap-4">
+        {services.map((service) => (
+          <Card 
+            key={service.id}
+            className="card-premium cursor-pointer hover:border-primary transition-all"
+            onClick={() => {
+              setBookingData({...bookingData, service});
+              setCurrentStep('datetime');
+            }}
+          >
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-semibold text-lg">{service.name}</h3>
+                  <p className="text-sm text-muted-foreground">{service.description}</p>
+                  <p className="text-xs text-muted-foreground">Duração: {service.duration} minutos</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-2xl font-bold text-primary">R$ {service.price.toFixed(2)}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <div className="flex justify-center">
+        <Button variant="ghost" onClick={() => setCurrentStep('professionals')}>
+          <ArrowLeft className="h-4 w-4 mr-2" />
+          Voltar
+        </Button>
+      </div>
+    </div>
+  );
 
   // DateTime Step
   const DateTimeStep = () => (
@@ -400,14 +579,16 @@ export default function Booking() {
           <div className="space-y-2">
             <Button 
               className="w-full btn-premium"
-              onClick={() => setCurrentStep('confirmation')}
+              onClick={handleBookingSubmit}
+              disabled={loading}
             >
-              Finalizar Agendamento
+              {loading ? "Agendando..." : "Finalizar Agendamento"}
             </Button>
             <Button 
               variant="outline" 
               className="w-full"
-              onClick={() => setCurrentStep('confirmation')}
+              onClick={handleBookingSubmit}
+              disabled={loading}
             >
               Pular e Finalizar
             </Button>
@@ -444,7 +625,7 @@ export default function Booking() {
               <p><strong>Serviço:</strong> {bookingData.service?.name}</p>
               <p><strong>Data:</strong> {bookingData.date && format(bookingData.date, "dd 'de' MMMM 'de' yyyy", { locale: ptBR })}</p>
               <p><strong>Horário:</strong> {bookingData.time}</p>
-              <p><strong>Preço:</strong> {bookingData.service?.price}</p>
+              <p><strong>Preço:</strong> R$ {bookingData.service?.price.toFixed(2)}</p>
               {bookingData.notes && <p><strong>Observações:</strong> {bookingData.notes}</p>}
             </div>
           </div>
@@ -473,7 +654,7 @@ export default function Booking() {
     </div>
   );
 
-  // My Bookings Step
+  // My Bookings Step - placeholder for now
   const MyBookingsStep = () => (
     <div className="space-y-6">
       <div className="text-center space-y-2">
@@ -481,61 +662,23 @@ export default function Booking() {
         <p className="text-muted-foreground">Gerencie seus horários marcados</p>
       </div>
 
-      <div className="grid gap-4">
-        <Card className="card-premium">
-          <CardHeader>
-            <CardTitle className="flex items-center justify-between">
-              <span>Próximos Agendamentos</span>
-              <Badge className="bg-primary text-primary-foreground">Ativo</Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="border rounded-lg p-4 space-y-2">
-              <div className="flex items-center justify-between">
-                <h4 className="font-semibold">{bookingData.service?.name}</h4>
-                <span className="text-sm text-muted-foreground">{bookingData.service?.price}</span>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                Com {bookingData.professional?.name}
-              </p>
-              <div className="flex items-center space-x-4 text-sm">
-                <div className="flex items-center">
-                  <CalendarIcon className="h-4 w-4 mr-1" />
-                  {bookingData.date && format(bookingData.date, "dd/MM/yyyy")}
-                </div>
-                <div className="flex items-center">
-                  <Clock className="h-4 w-4 mr-1" />
-                  {bookingData.time}
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="card-premium">
-          <CardHeader>
-            <CardTitle>Histórico</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-center text-muted-foreground py-8">
-              Nenhum agendamento anterior encontrado
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="flex justify-center space-x-4">
-        <Button 
-          variant="outline"
-          onClick={() => {
-            setCurrentStep('welcome');
-            setBookingData({});
-            setSelectedDate(undefined);
-          }}
-        >
-          Novo Agendamento
-        </Button>
-      </div>
+      <Card className="card-premium">
+        <CardContent className="p-6 text-center">
+          <p className="text-muted-foreground">
+            Funcionalidade em desenvolvimento. Seus agendamentos aparecerão aqui em breve.
+          </p>
+          <Button 
+            className="mt-4"
+            onClick={() => {
+              setCurrentStep('welcome');
+              setBookingData({});
+              setSelectedDate(undefined);
+            }}
+          >
+            Voltar ao Início
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   );
 
@@ -566,7 +709,7 @@ export default function Booking() {
                     width: currentStep === 'login' ? '20%' : 
                            currentStep === 'professionals' ? '40%' :
                            currentStep === 'services' ? '60%' :
-                           currentStep === 'datetime' ? '80%' : '100%'
+                           currentStep === 'datetime' || currentStep === 'notes' ? '80%' : '100%'
                   }}></div>
                 </div>
                 <div className="w-2 h-2 rounded-full bg-primary/20"></div>
